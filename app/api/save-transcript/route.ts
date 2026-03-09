@@ -1,21 +1,27 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { assignment } from "@/lib/assignment";
+import { getCachedSessionData } from "@/lib/session-cache";
 import { saveTranscriptToNotion } from "@/lib/notion";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
+    const { messages, sessionId } = await req.json();
+
+    if (!sessionId) {
+      return Response.json({ error: "Missing sessionId" }, { status: 400 });
+    }
+
+    const session = await getCachedSessionData(sessionId);
 
     // Format the transcript
-    const transcript = formatTranscript(messages);
+    const transcript = formatTranscript(messages, session.studentName, session.assignmentTitle);
 
     // Generate agent assessment
     const assessmentResponse = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2048,
-      system: `You are an educational assessment specialist. You will read a tutoring session transcript and produce a structured assessment. The student's name is ${assignment.studentName}. The assignment was: ${assignment.title}.
+      system: `You are an educational assessment specialist. You will read a tutoring session transcript and produce a structured assessment. The student's name is ${session.studentName}. The assignment was: ${session.assignmentTitle}.
 
 Produce an assessment covering:
 1. ENGAGEMENT & EFFORT - Did the student engage genuinely? Did they attempt ideas before asking for help?
@@ -40,7 +46,7 @@ Be specific and reference actual moments from the transcript.`,
         : "";
 
     // Save to Notion
-    await saveTranscriptToNotion(assignment.notionPageId, transcript, assessment);
+    await saveTranscriptToNotion(session.studentAssignmentPageId, transcript, assessment);
 
     return Response.json({ success: true });
   } catch (error) {
@@ -53,13 +59,14 @@ Be specific and reference actual moments from the transcript.`,
 }
 
 function formatTranscript(
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string }>,
+  studentName: string,
+  assignmentTitle: string
 ): string {
   const lines = [
     `TUTORING SESSION TRANSCRIPT`,
-    `Student: ${assignment.studentName}`,
-    `Assignment: ${assignment.title}`,
-    `Tutor Mode: Socratic Brainstorming`,
+    `Student: ${studentName}`,
+    `Assignment: ${assignmentTitle}`,
     `Date: ${new Date().toLocaleDateString()}`,
     ``,
     `---`,
@@ -69,7 +76,7 @@ function formatTranscript(
   for (const msg of messages) {
     const speaker =
       msg.role === "user"
-        ? assignment.studentName.toUpperCase()
+        ? studentName.toUpperCase()
         : "TUTOR";
     lines.push(`${speaker}: ${msg.content}`);
     lines.push("");

@@ -2,6 +2,90 @@ import { Client } from "@notionhq/client";
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 
+// --- Session Data Fetching ---
+
+export interface SessionData {
+  studentName: string;
+  assignmentTitle: string;
+  assignmentType: string;
+  instructionsForStudent: string;
+  tutorBehaviorInstructions: string;
+  studentAssignmentPageId: string;
+}
+
+function extractRichText(prop: any): string {
+  if (!prop?.rich_text) return "";
+  return prop.rich_text.map((rt: any) => rt.plain_text).join("");
+}
+
+function extractTitle(prop: any): string {
+  if (!prop?.title) return "";
+  return prop.title.map((t: any) => t.plain_text).join("");
+}
+
+export async function getSessionData(
+  studentAssignmentId: string
+): Promise<SessionData> {
+  // 1. Fetch the Student Assignment page
+  const saPage = await notion.pages.retrieve({
+    page_id: studentAssignmentId,
+  }) as any;
+
+  // 2. Extract relation IDs
+  const studentRelation = saPage.properties["Student"]?.relation;
+  const assignmentRelation = saPage.properties["Assignment"]?.relation;
+
+  if (!studentRelation?.[0]?.id) {
+    throw new Error("No student linked to this assignment");
+  }
+  if (!assignmentRelation?.[0]?.id) {
+    throw new Error("No assignment linked to this record");
+  }
+
+  const studentPageId = studentRelation[0].id;
+  const assignmentPageId = assignmentRelation[0].id;
+
+  // 3. Fetch Student and Assignment pages in parallel
+  const [studentPage, assignmentPage] = await Promise.all([
+    notion.pages.retrieve({ page_id: studentPageId }) as Promise<any>,
+    notion.pages.retrieve({ page_id: assignmentPageId }) as Promise<any>,
+  ]);
+
+  // 4. Extract data
+  const studentName = extractTitle(studentPage.properties["Name"]);
+  const assignmentTitle = extractTitle(assignmentPage.properties["Assignment Name"]);
+  const assignmentType = assignmentPage.properties["Type"]?.select?.name ?? "";
+  const instructionsForStudent = extractRichText(assignmentPage.properties["Instructions for Student"]);
+  const tutorBehaviorInstructions = extractRichText(assignmentPage.properties["Tutor Behavior Instructions"]);
+
+  return {
+    studentName,
+    assignmentTitle,
+    assignmentType,
+    instructionsForStudent,
+    tutorBehaviorInstructions,
+    studentAssignmentPageId: studentAssignmentId,
+  };
+}
+
+export function buildSystemPrompt(session: SessionData): string {
+  return `${session.tutorBehaviorInstructions}
+
+The student's name is ${session.studentName}. Address them by name occasionally. Be warm and encouraging.`;
+}
+
+export function buildOpeningMessage(session: SessionData): string {
+  return `Hi ${session.studentName}! Welcome to your ${session.assignmentType} exercise.
+
+Here are your instructions:
+
+${session.instructionsForStudent}
+
+Let's get started — what are your initial thoughts?`;
+}
+
+// --- Transcript Saving ---
+
 export async function saveTranscriptToNotion(
   pageId: string,
   transcript: string,

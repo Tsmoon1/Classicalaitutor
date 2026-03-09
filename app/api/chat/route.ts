@@ -1,15 +1,23 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { assignment } from "@/lib/assignment";
+import { getCachedSessionData } from "@/lib/session-cache";
+import { buildSystemPrompt } from "@/lib/notion";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: Request) {
-  const { messages } = await req.json();
+  const { messages, sessionId } = await req.json();
+
+  if (!sessionId) {
+    return new Response("Missing sessionId", { status: 400 });
+  }
+
+  const session = await getCachedSessionData(sessionId);
+  const systemPrompt = buildSystemPrompt(session);
 
   const stream = anthropic.messages.stream({
     model: "claude-sonnet-4-20250514",
     max_tokens: 1024,
-    system: assignment.tutorSystemPrompt,
+    system: systemPrompt,
     messages: messages,
   });
 
